@@ -129,7 +129,7 @@ def exibir_catalogo():
     st.title("📦 Catálogo GET 132")
     c1, c2 = st.columns([1, 2])
     busca = c1.text_input("🔍 Buscar...")
-    ramos = c2.multiselect("⚜️ Ramos", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"], default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+    ramos = c2.multiselect("⚜️ Ramos", ["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"], default=[])
 
     conn = get_db_connection()
     if conn:
@@ -188,7 +188,7 @@ def exibir_cadastro():
         col1, col2 = st.columns(2)
         cod = col1.text_input("Código")
         nome = col1.text_input("Nome")
-        ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        ramo = col2.selectbox("Ramo", ["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"])
         desc = st.text_area("Descrição")
         foto_upload = st.file_uploader("Foto", type=['jpg', 'jpeg', 'png'])
         
