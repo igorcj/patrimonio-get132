@@ -3,7 +3,7 @@ import psycopg2
 import pandas as pd
 from PIL import Image
 import io
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(page_title="Patrimônio GET 132", page_icon="⚜️", layout="wide")
 
@@ -19,38 +19,32 @@ def get_db_connection():
         st.error(f"Erro de Conexão: {e}")
         return None
 
-# --- FUNÇÃO AUXILIAR: RESERVAS ---
-def salvar_reserva(codigo, usuario, d_inicio, d_fim):
+# --- FUNÇÃO: LIMPEZA AUTOMÁTICA ---
+def limpar_reservas_antigas():
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor()
-            # Verifica se já existe reserva no período
-            cur.execute("""
-                SELECT id FROM reservas 
-                WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)
-            """, (codigo, d_inicio, d_fim))
-            
-            if cur.fetchone():
-                st.error("⚠️ Este item já está reservado em parte desse período!")
-                return False
-            
-            cur.execute(
-                "INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)",
-                (codigo, usuario, d_inicio, d_fim)
-            )
+            cur.execute("DELETE FROM reservas WHERE data_fim < CURRENT_DATE")
             conn.commit()
             cur.close()
             conn.close()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao reservar: {e}")
-    return False
+        except:
+            pass
 
 # --- PÁGINA: CATÁLOGO ---
 def exibir_catalogo():
-    st.title("📦 Catálogo e Reservas")
-    busca = st.text_input("🔍 Buscar item...")
+    st.title("📦 Catálogo de Equipamentos")
+    
+    # Filtros na Barra Lateral para o Catálogo
+    st.sidebar.divider()
+    st.sidebar.write("### Filtros")
+    busca = st.sidebar.text_input("🔍 Busca rápida", placeholder="Nome ou código...")
+    ramos_selecionados = st.sidebar.multiselect(
+        "Filtrar por Ramo:", 
+        ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"],
+        default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"]
+    )
     
     conn = get_db_connection()
     if conn:
@@ -58,71 +52,97 @@ def exibir_catalogo():
         conn.close()
 
         if not df.empty:
+            # Aplicação dos Filtros
+            if ramos_selecionados:
+                df = df[df['ramo'].isin(ramos_selecionados)]
             if busca:
                 df = df[df.apply(lambda r: busca.lower() in str(r.values).lower(), axis=1)]
 
             cols = st.columns(4)
             for i, row in df.reset_index(drop=True).iterrows():
                 with cols[i % 4]:
+                    # Imagem e Infos Básicas
                     st.image(bytes(row['foto_blob']) if row['foto_blob'] else "https://via.placeholder.com/300", use_container_width=True)
                     st.subheader(f"#{row['codigo']} {row['nome']}")
+                    st.markdown(f"**Ramo:** {row['ramo']}")
+                    st.caption(row['descricao'])
                     
-                    with st.expander("📝 Reservar este item"):
-                        with st.form(f"f_res_{row['codigo']}"):
-                            quem = st.text_input("Nome do Responsável")
-                            d_ini = st.date_input("Início da Reserva", min_value=datetime.now())
-                            d_fim = st.date_input("Fim da Reserva", min_value=d_ini)
-                            
+                    # Seção de Detalhes e Ações
+                    with st.expander("📅 Reservar / ⚙️ Gerenciar"):
+                        # Aba de Reserva
+                        st.write("**Nova Reserva:**")
+                        with st.form(f"f_res_{row['codigo']}", clear_on_submit=True):
+                            quem = st.text_input("Responsável")
+                            d_ini = st.date_input("Início", min_value=datetime.now())
+                            d_fim = st.date_input("Fim", min_value=d_ini)
                             if st.form_submit_button("Confirmar Reserva"):
-                                if quem and salvar_reserva(row['codigo'], quem, d_ini, d_fim):
-                                    st.success(f"Reservado para {quem}!")
-                                    st.balloons()
+                                if quem:
+                                    reserva_sucesso = realizar_reserva_sql(row['codigo'], quem, d_ini, d_fim)
+                                    if reserva_sucesso: st.success("Reserva feita!")
+                        
+                        st.divider()
+                        # Aba de Exclusão (Com confirmação dupla)
+                        st.write("⚠️ **Zona de Perigo**")
+                        if st.checkbox(f"Desejo remover o item #{row['codigo']}", key=f"del_chk_{row['codigo']}"):
+                            if st.button(f"CONFIRMAR EXCLUSÃO DEFINITIVA", key=f"del_btn_{row['codigo']}"):
+                                remover_item_sql(row['codigo'])
+                                st.rerun()
 
-# --- PÁGINA: AGENDA/CALENDÁRIO ---
+# --- FUNÇÕES SQL AUXILIARES ---
+def realizar_reserva_sql(codigo, usuario, d_ini, d_fim):
+    conn = get_db_connection()
+    if conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (codigo, d_ini, d_fim))
+        if cur.fetchone():
+            st.error("Item ocupado nesta data!")
+            return False
+        cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (codigo, usuario, d_ini, d_fim))
+        conn.commit()
+        conn.close()
+        return True
+
+def remover_item_sql(codigo):
+    conn = get_db_connection()
+    if conn:
+        cur = conn.cursor()
+        # Primeiro remove as reservas do item para não dar erro de chave estrangeira
+        cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (codigo,))
+        cur.execute("DELETE FROM itens WHERE codigo = %s", (codigo,))
+        conn.commit()
+        conn.close()
+        st.toast(f"Item {codigo} removido!")
+
+# --- PÁGINA: AGENDA ---
 def exibir_agenda():
     st.title("📅 Agenda de Ocupação")
+    limpar_reservas_antigas() # Autolimpeza ao abrir
     
     conn = get_db_connection()
     if conn:
-        # Join para pegar o nome do item também
         query = """
             SELECT r.data_inicio, r.data_fim, r.usuario, i.nome, i.codigo 
             FROM reservas r 
             JOIN itens i ON r.item_codigo = i.codigo
-            WHERE r.data_fim >= CURRENT_DATE
             ORDER BY r.data_inicio ASC
         """
         df_res = pd.read_sql(query, conn)
         conn.close()
 
         if not df_res.empty:
-            # Visão de Tabela Organizada por Dia
-            st.write("Abaixo estão os itens que estão fora ou sairão em breve:")
-            
-            # Formatação para exibição
             df_res['Período'] = df_res.apply(lambda x: f"{x['data_inicio'].strftime('%d/%m')} até {x['data_fim'].strftime('%d/%m')}", axis=1)
-            df_res_display = df_res[['Período', 'codigo', 'nome', 'usuario']].rename(columns={
-                'codigo': 'Cód.', 'nome': 'Equipamento', 'usuario': 'Quem Reservou'
-            })
-            
-            st.table(df_res_display)
-            
-            # Dica de Visão de "Hoje"
-            hoje = datetime.now().date()
-            em_uso = df_res[(df_res['data_inicio'] <= hoje) & (df_res['data_fim'] >= hoje)]
-            if not em_uso.empty:
-                st.warning(f"🚨 Atualmente {len(em_uso)} itens estão em uso hoje!")
+            st.table(df_res[['Período', 'codigo', 'nome', 'usuario']].rename(columns={'codigo': 'Cód.', 'nome': 'Item', 'usuario': 'Responsável'}))
         else:
-            st.info("Não há reservas futuras registradas.")
+            st.info("Nenhuma reserva ativa.")
 
-# --- PÁGINA: CADASTRO (Mantenha a que já temos) ---
+# --- PÁGINA: CADASTRO ---
 def exibir_cadastro():
     st.title("➕ Cadastrar Item")
-    # ... (mesmo código da câmera que enviamos anteriormente) ...
     with st.form("cad_form", clear_on_submit=True):
-        cod = st.text_input("Código")
-        nome = st.text_input("Nome")
-        ramo = st.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        col1, col2 = st.columns(2)
+        cod = col1.text_input("Código")
+        nome = col1.text_input("Nome")
+        ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
         desc = st.text_area("Descrição")
         f_cam = st.camera_input("Tirar foto")
         f_up = st.file_uploader("Ou subir arquivo", type=['jpg', 'jpeg', 'png'])
@@ -144,9 +164,9 @@ def exibir_cadastro():
                                 (cod, nome, desc, ramo, psycopg2.Binary(buf.getvalue())))
                     conn.commit()
                     conn.close()
-                    st.success("Salvo!")
+                    st.success("Item salvo!")
 
-# --- NAVEGAÇÃO ---
+# --- MENU LATERAL ---
 st.sidebar.title("⚜️ GET 132")
 opcao = st.sidebar.radio("Ir para:", ["📦 Catálogo", "📅 Agenda", "➕ Cadastrar"])
 
