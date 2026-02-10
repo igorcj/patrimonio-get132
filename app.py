@@ -6,7 +6,7 @@ import io
 st.set_page_config(page_title="Patrimônio GET 132", page_icon="⚜️", layout="wide")
 
 # Conexão robusta usando a URL dos Secrets
-conn = st.connection("postgresql", type="sql", autocommit=True)
+conn = st.connection("postgresql", type="sql")
 
 # --- FUNÇÕES DE INTERFACE ---
 def exibir_catalogo():
