@@ -163,7 +163,7 @@ def exibir_agenda():
             
             # Exibição linha a linha para permitir exclusão na agenda
             for _, row in df.iterrows():
-                cor = "#d1e7dd" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
+                cor = "#005555" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
                 with st.container():
                     c_ag1, c_ag2, c_ag3 = st.columns([3, 2, 1])
                     with c_ag1:
