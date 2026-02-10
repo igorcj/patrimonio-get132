@@ -19,7 +19,7 @@ def get_db_connection():
         st.error(f"Erro de Conexão: {e}")
         return None
 
-# --- FUNÇÕES SQL ---
+# --- LIMPEZA ---
 def limpar_reservas_antigas():
     conn = get_db_connection()
     if conn:
@@ -35,46 +35,54 @@ def limpar_reservas_antigas():
 def modal_detalhes(item):
     st.write(f"### {item['nome']} (#{item['codigo']})")
     st.image(bytes(item['foto_blob']) if item['foto_blob'] else "https://via.placeholder.com/300")
-    st.write(f"**Ramo:** {item['ramo']}")
     st.write(f"**Descrição:** {item['descricao']}")
     
     st.divider()
-    tab1, tab2, tab3 = st.tabs(["📅 Reservar", "📋 Ver Reservas", "⚙️ Gerenciar"])
+    tab1, tab2, tab3 = st.tabs(["📅 Reservar", "📋 Ocupação", "⚙️ Gerenciar"])
     
     with tab1:
-        with st.form(f"res_{item['codigo']}", clear_on_submit=True):
-            quem = st.text_input("Responsável")
-            d_ini = st.date_input("Início", min_value=datetime.now())
-            d_fim = st.date_input("Fim", min_value=d_ini)
-            if st.form_submit_button("Confirmar Reserva"):
-                if quem:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (item['codigo'], d_ini, d_fim))
-                    if cur.fetchone():
-                        st.error("Item ocupado nestas datas!")
-                    else:
-                        cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (item['codigo'], quem, d_ini, d_fim))
-                        conn.commit()
-                        st.success("Reserva realizada!")
-                    conn.close()
+        # Usamos chaves únicas para garantir que o Streamlit não perca as datas
+        quem = st.text_input("Nome do Responsável", key=f"user_input_{item['codigo']}")
+        d_ini = st.date_input("Data de Retirada", min_value=datetime.now().date(), key=f"start_{item['codigo']}")
+        d_fim = st.date_input("Data de Devolução", min_value=d_ini, key=f"end_{item['codigo']}")
+        
+        if st.button("Confirmar Reserva", use_container_width=True):
+            if not quem:
+                st.warning("Por favor, informe quem é o responsável.")
+            else:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                # Verifica conflito
+                cur.execute("""
+                    SELECT id FROM reservas 
+                    WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)
+                """, (item['codigo'], d_ini, d_fim))
+                
+                if cur.fetchone():
+                    st.error("⚠️ Este item já está reservado neste período!")
+                else:
+                    cur.execute(
+                        "INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)",
+                        (item['codigo'], quem, d_ini, d_fim)
+                    )
+                    conn.commit()
+                    st.success("✅ Reserva realizada!")
+                    st.rerun()
+                conn.close()
 
     with tab2:
         conn = get_db_connection()
-        if conn:
-            query_item = "SELECT usuario, data_inicio, data_fim FROM reservas WHERE item_codigo = %s ORDER BY data_inicio ASC"
-            df_item_res = pd.read_sql(query_item, conn, params=(item['codigo'],))
-            conn.close()
-            if not df_item_res.empty:
-                df_item_res.columns = ['Responsável', 'Início', 'Fim']
-                st.dataframe(df_item_res, use_container_width=True, hide_index=True)
-            else:
-                st.info("Nenhuma reserva para este item.")
+        df_res = pd.read_sql("SELECT usuario, data_inicio, data_fim FROM reservas WHERE item_codigo = %s ORDER BY data_inicio ASC", conn, params=(item['codigo'],))
+        conn.close()
+        if not df_res.empty:
+            df_res.columns = ['Responsável', 'Início', 'Fim']
+            st.table(df_res)
+        else:
+            st.info("Item livre em todas as datas.")
 
     with tab3:
-        st.warning("Atenção: Esta ação removerá o item e todas as suas reservas.")
-        if st.checkbox(f"Confirmar que deseja deletar #{item['codigo']}"):
-            if st.button("DELETAR PERMANENTEMENTE"):
+        if st.checkbox("Confirmar exclusão definitiva do item"):
+            if st.button("Remover agora", type="primary"):
                 conn = get_db_connection()
                 cur = conn.cursor()
                 cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (item['codigo'],))
@@ -87,10 +95,10 @@ def modal_detalhes(item):
 def exibir_catalogo():
     st.title("📦 Catálogo GET 132")
     
-    # Filtros Sempre Visíveis no Topo
-    c1, c2 = st.columns([2, 3])
-    busca = c1.text_input("🔍 Buscar por nome ou código")
-    ramos = c2.multiselect("⚜️ Filtrar Ramos", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"], default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+    # Filtros estáveis
+    c1, c2 = st.columns([1, 2])
+    busca = c1.text_input("🔍 Buscar...")
+    ramos = c2.multiselect("⚜️ Ramos", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"], default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
 
     conn = get_db_connection()
     if conn:
@@ -102,19 +110,15 @@ def exibir_catalogo():
             if busca:
                 df = df[df.apply(lambda r: busca.lower() in str(r.values).lower(), axis=1)]
 
-            # Lógica de colunas: 1 por linha no celular (ou telas muito estreitas), 4 no PC
-            # O Streamlit ajusta automaticamente o layout, mas st.columns facilita o controle
-            num_cols = 1 if st.session_state.get('viewport_width', 1000) < 600 else 4
-            cols = st.columns(num_cols)
-            
+            # Lógica para 1 coluna no celular (simulado por largura)
+            cols = st.columns(4) # O Streamlit empilha em 1 col automaticamente no celular
             for i, row in df.reset_index(drop=True).iterrows():
-                with cols[i % num_cols]:
+                with cols[i % 4]:
                     st.image(bytes(row['foto_blob']) if row['foto_blob'] else "https://via.placeholder.com/300", use_container_width=True)
-                    st.write(f"**#{row['codigo']} {row['nome']}**")
+                    st.markdown(f"**#{row['codigo']} {row['nome']}**")
                     st.caption(f"Ramo: {row['ramo']}")
-                    if st.button("Ver / Reservar", key=f"btn_{row['codigo']}", use_container_width=True):
+                    if st.button("Ver / Reservar", key=f"btn_cat_{row['codigo']}", use_container_width=True):
                         modal_detalhes(row)
-                    st.write("") # Espaçador
 
 # --- PÁGINA: AGENDA ---
 def exibir_agenda():
@@ -133,33 +137,40 @@ def exibir_agenda():
         if not df.empty:
             hoje = datetime.now().date()
             
+            # Função de destaque corrigida: usamos os nomes exatos das colunas do DataFrame
             def destacar_hoje(row):
+                # Importante: checar os nomes exatos retornados pelo SQL
                 if row['data_inicio'] <= hoje <= row['data_fim']:
                     return ['background-color: #d1e7dd; color: #0f5132; font-weight: bold'] * len(row)
                 return [''] * len(row)
 
-            st.write("Linhas em **verde** indicam equipamentos que estão fora hoje.")
+            st.write("Linhas em **verde** indicam equipamentos fora do depósito hoje.")
+            
+            # Aplicamos o estilo ANTES de renomear as colunas para evitar o KeyError
+            styled_df = df.style.apply(destacar_hoje, axis=1)
+            
+            # Renomeamos as colunas apenas na visualização
             df_view = df.rename(columns={'data_inicio': 'Início', 'data_fim': 'Fim', 'codigo': 'Cód', 'nome': 'Item', 'usuario': 'Responsável'})
-            st.dataframe(df_view.style.apply(destacar_hoje, axis=1), use_container_width=True, hide_index=True)
+            
+            # Nota: O .style do pandas retorna um objeto que o st.dataframe entende
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhuma reserva futura.")
+            st.info("Nenhuma reserva ativa.")
 
 # --- PÁGINA: CADASTRO ---
 def exibir_cadastro():
     st.title("➕ Cadastrar Item")
     with st.form("cad_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        cod = col1.text_input("Código")
-        nome = col1.text_input("Nome")
-        ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        cod = st.text_input("Código")
+        nome = st.text_input("Nome")
+        ramo = st.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
         desc = st.text_area("Descrição")
         foto = st.camera_input("Foto")
         if st.form_submit_button("Salvar"):
             if cod and nome and foto:
                 img = Image.open(foto)
-                w, h = img.size
-                d = min(w, h)
-                img = img.crop(((w-d)//2, (h-d)//2, (w+d)//2, (h+d)//2)).resize((300,300))
+                d = min(img.size)
+                img = img.crop(((img.width-d)//2, (img.height-d)//2, (img.width+d)//2, (img.height+d)//2)).resize((300,300))
                 buf = io.BytesIO()
                 img.convert("RGB").save(buf, format="JPEG", quality=50)
                 conn = get_db_connection()
@@ -169,7 +180,7 @@ def exibir_cadastro():
                 conn.close()
                 st.success("Salvo!")
 
-# --- MENU LATERAL ---
+# --- NAVEGAÇÃO ---
 opcao = st.sidebar.radio("Navegação", ["📦 Catálogo", "📅 Agenda", "➕ Cadastrar"])
 if opcao == "📦 Catálogo": exibir_catalogo()
 elif opcao == "📅 Agenda": exibir_agenda()
