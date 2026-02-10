@@ -7,6 +7,9 @@ from datetime import datetime, date
 
 st.set_page_config(page_title="Patrimônio GET 132", page_icon="⚜️", layout="wide")
 
+# --- LISTA PADRÃO DE RAMOS (Grupo primeiro) ---
+LISTA_RAMOS = ["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"]
+
 # --- CONEXÃO ---
 def get_db_connection():
     try:
@@ -27,9 +30,7 @@ if "user_ramo" not in st.session_state:
 
 if st.session_state.auth_level is None:
     st.title("⚜️ Acesso ao Patrimônio - GET 132")
-    
-    # Menu suspenso para escolha do usuário
-    user_type = st.selectbox("Selecione seu usuário:", ["Selecionar...", "Admin", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"])
+    user_type = st.selectbox("Selecione seu usuário:", ["Selecionar...", "Admin"] + LISTA_RAMOS[1:])
     senha = st.text_input("Senha:", type="password")
     
     if st.button("Entrar"):
@@ -55,10 +56,8 @@ if st.session_state.auth_level is None:
             st.session_state.user_ramo = "Pioneiro"
             login_valido = True
         
-        if login_valido:
-            st.rerun()
-        else:
-            st.error("Usuário ou senha incorretos!")
+        if login_valido: st.rerun()
+        else: st.error("Senha incorreta!")
     st.stop()
 
 # --- FUNÇÕES SQL ---
@@ -67,8 +66,7 @@ def deletar_reserva_sql(reserva_id):
     if conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM reservas WHERE id = %s", (reserva_id,))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         st.rerun()
 
 # --- MODAL DETALHES ---
@@ -76,13 +74,12 @@ def deletar_reserva_sql(reserva_id):
 def modal_detalhes(item):
     st.write(f"### {item['nome']} (#{item['codigo']})")
     st.image(bytes(item['foto_blob']) if item['foto_blob'] else "https://via.placeholder.com/300")
-    st.write(f"**Ramo:** {item['ramo']} | **Descrição:** {item['descricao']}")
+    st.markdown(f"**Ramo:** {item['ramo']}")
+    st.markdown(f"**Descrição:**\n\n{item['descricao']}")
     st.divider()
     
     tabs_labels = ["📅 Reservar", "📋 Ocupação"]
-    if st.session_state.auth_level == "admin":
-        tabs_labels.append("⚙️ Gerenciar")
-    
+    if st.session_state.auth_level == "admin": tabs_labels.append("⚙️ Gerenciar")
     tabs = st.tabs(tabs_labels)
     
     with tabs[0]: # Reservar
@@ -92,16 +89,12 @@ def modal_detalhes(item):
         d_fim = st.date_input("Devolução", value=d_ini, min_value=d_ini, key=f"end_{item['codigo']}")
         if st.button("Confirmar Reserva", use_container_width=True):
             if quem:
-                conn = get_db_connection()
-                cur = conn.cursor()
+                conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (item['codigo'], d_ini, d_fim))
-                if cur.fetchone():
-                    st.error("⚠️ Já reservado neste período!")
+                if cur.fetchone(): st.error("⚠️ Já reservado!")
                 else:
                     cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (item['codigo'], quem, d_ini, d_fim))
-                    conn.commit()
-                    st.success("Reserva realizada!")
-                    st.rerun()
+                    conn.commit(); st.success("Reserva realizada!"); st.rerun()
                 conn.close()
 
     with tabs[1]: # Ocupação
@@ -110,39 +103,32 @@ def modal_detalhes(item):
         conn.close()
         if not df_res.empty:
             for _, r in df_res.iterrows():
-                c_r1, c_r2 = st.columns([3, 1])
-                c_r1.write(f"**{r['usuario']}**: {r['data_inicio'].strftime('%d/%m')} - {r['data_fim'].strftime('%d/%m')}")
+                c1, c2 = st.columns([3, 1])
+                c1.write(f"**{r['usuario']}**: {r['data_inicio'].strftime('%d/%m')} - {r['data_fim'].strftime('%d/%m')}")
                 if st.session_state.auth_level == "admin":
-                    if c_r2.button("Remover", key=f"del_res_{r['id']}"):
-                        deletar_reserva_sql(r['id'])
+                    if c2.button("Remover", key=f"del_res_{r['id']}"): deletar_reserva_sql(r['id'])
         else: st.info("Item livre.")
 
     if st.session_state.auth_level == "admin":
         with tabs[2]: # Gerenciar
             if st.checkbox("Confirmar exclusão definitiva do ITEM"):
                 if st.button("REMOVER ITEM AGORA", type="primary"):
-                    conn = get_db_connection()
-                    cur = conn.cursor()
+                    conn = get_db_connection(); cur = conn.cursor()
                     cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (item['codigo'],))
                     cur.execute("DELETE FROM itens WHERE codigo = %s", (item['codigo'],))
-                    conn.commit()
-                    conn.close()
-                    st.rerun()
+                    conn.commit(); conn.close(); st.rerun()
 
 # --- PÁGINA: CATÁLOGO ---
 def exibir_catalogo():
     st.title("📦 Catálogo")
-    st.caption(f"Logado como: {st.session_state.auth_level.capitalize()} ({st.session_state.user_ramo})")
-    
     c1, c2 = st.columns([1, 2])
     busca = c1.text_input("🔍 Buscar...")
     
-    # Se for Admin, pode filtrar qualquer ramo. Se for usuário de ramo, o filtro já vem travado.
     if st.session_state.auth_level == "admin":
-        ramos_filtro = c2.multiselect("⚜️ Ramos", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"], default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        ramos_filtro = c2.multiselect("⚜️ Ramos", LISTA_RAMOS, default=LISTA_RAMOS)
     else:
+        # Usuário comum vê apenas seu ramo e o que é de "Grupo"
         ramos_filtro = [st.session_state.user_ramo, "Grupo"]
-        c2.info(f"Mostrando itens de: {st.session_state.user_ramo} e Grupo")
 
     conn = get_db_connection()
     if conn:
@@ -158,6 +144,7 @@ def exibir_catalogo():
                 with cols[i % 4]:
                     st.image(bytes(row['foto_blob']) if row['foto_blob'] else "https://via.placeholder.com/300", use_container_width=True)
                     st.markdown(f"**#{row['codigo']} {row['nome']}**")
+                    st.caption(f"⚜️ {row['ramo']}") # Exibe o ramo sob o nome
                     if st.button("Ver / Reservar", key=f"btn_cat_{row['codigo']}", use_container_width=True):
                         modal_detalhes(row)
 
@@ -166,7 +153,6 @@ def exibir_agenda():
     st.title("📅 Agenda Geral")
     conn = get_db_connection()
     if conn:
-        # Usuários só veem na agenda as reservas dos itens que eles podem ver
         if st.session_state.auth_level == "admin":
             query = "SELECT r.id, r.data_inicio, r.data_fim, r.usuario, i.nome, i.codigo, i.ramo FROM reservas r JOIN itens i ON r.item_codigo = i.codigo ORDER BY r.data_inicio ASC"
             df = pd.read_sql(query, conn)
@@ -178,7 +164,7 @@ def exibir_agenda():
         if not df.empty:
             hoje = date.today()
             for _, row in df.iterrows():
-                cor = "#d1e7dd" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
+                cor = "#005555" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
                 with st.container():
                     c1, c2, c3 = st.columns([3, 2, 1])
                     c1.markdown(f"<div style='background-color:{cor}; padding:5px; border-radius:5px;'><b>{row['nome']}</b> (#{row['codigo']})<br>{row['usuario']} ({row['ramo']})</div>", unsafe_allow_html=True)
@@ -186,21 +172,19 @@ def exibir_agenda():
                     if st.session_state.auth_level == "admin":
                         if c3.button("Baixa", key=f"ag_del_{row['id']}"): deletar_reserva_sql(row['id'])
                 st.divider()
-        else: st.info("Nenhuma reserva ativa para seu acesso.")
+        else: st.info("Nenhuma reserva ativa.")
 
 # --- PÁGINA: CADASTRO ---
 def exibir_cadastro():
-    if st.session_state.auth_level != "admin":
-        st.error("Acesso restrito.")
-        return
+    if st.session_state.auth_level != "admin": return
     st.title("➕ Cadastrar Item")
     with st.form("cad_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         cod = col1.text_input("Código")
         nome = col1.text_input("Nome")
-        ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        ramo = col2.selectbox("Ramo", LISTA_RAMOS) # "Grupo" aparece primeiro
         desc = st.text_area("Descrição")
-        foto = st.file_uploader("Foto (Câmera ou Galeria)", type=['jpg', 'jpeg', 'png'])
+        foto = st.file_uploader("Foto", type=['jpg', 'jpeg', 'png'])
         if st.form_submit_button("Salvar"):
             if cod and nome and foto:
                 img = Image.open(foto)
@@ -208,16 +192,14 @@ def exibir_cadastro():
                 buf = io.BytesIO(); img.convert("RGB").save(buf, format="JPEG", quality=50)
                 conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("INSERT INTO itens (codigo, nome, descricao, ramo, foto_blob) VALUES (%s, %s, %s, %s, %s)", (cod, nome, desc, ramo, psycopg2.Binary(buf.getvalue())))
-                conn.commit(); conn.close()
-                st.success("Salvo!")
+                conn.commit(); conn.close(); st.success("Salvo!")
 
 # --- NAVEGAÇÃO ---
 menu = ["📦 Catálogo", "📅 Agenda"]
 if st.session_state.auth_level == "admin": menu.append("➕ Cadastrar")
 opcao = st.sidebar.radio("Navegação", menu)
 if st.sidebar.button("Sair"):
-    st.session_state.auth_level = None
-    st.rerun()
+    st.session_state.auth_level = None; st.rerun()
 
 if opcao == "📦 Catálogo": exibir_catalogo()
 elif opcao == "📅 Agenda": exibir_agenda()
