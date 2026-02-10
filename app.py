@@ -144,7 +144,7 @@ def exibir_catalogo():
                 with cols[i % 4]:
                     st.image(bytes(row['foto_blob']) if row['foto_blob'] else "https://via.placeholder.com/300", use_container_width=True)
                     st.markdown(f"**#{row['codigo']} {row['nome']}**")
-                    st.caption(f"⚜️ {row['ramo']}") # Exibe o ramo sob o nome
+                    st.caption(f"{row['ramo']}") # Exibe o ramo sob o nome
                     if st.button("Ver / Reservar", key=f"btn_cat_{row['codigo']}", use_container_width=True):
                         modal_detalhes(row)
 
@@ -163,6 +163,7 @@ def exibir_agenda():
 
         if not df.empty:
             hoje = date.today()
+            st.write("Linhas em **verde** indicam equipamentos fora hoje.")
             for _, row in df.iterrows():
                 cor = "#005555" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
                 with st.container():
