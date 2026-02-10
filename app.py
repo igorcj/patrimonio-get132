@@ -19,7 +19,30 @@ def get_db_connection():
         st.error(f"Erro de Conexão: {e}")
         return None
 
-# --- LIMPEZA ---
+# --- LOGIN ---
+if "auth_level" not in st.session_state:
+    st.session_state.auth_level = None
+
+if st.session_state.auth_level is None:
+    st.title("⚜️ Acesso ao Patrimônio - GET 132")
+    senha = st.text_input("Digite a senha de acesso:", type="password")
+    if st.button("Entrar"):
+        if senha == st.secrets["senha_admin"]:
+            st.session_state.auth_level = "admin"
+            st.rerun()
+        elif senha == st.secrets["senha_membro"]:
+            st.session_state.auth_level = "membro"
+            st.rerun()
+        else:
+            st.error("Senha incorreta!")
+    st.stop()
+
+# --- LOGOUT (Opcional na barra lateral) ---
+if st.sidebar.button("Sair / Trocar Usuário"):
+    st.session_state.auth_level = None
+    st.rerun()
+
+# --- FUNÇÕES SQL ---
 def limpar_reservas_antigas():
     conn = get_db_connection()
     if conn:
@@ -31,6 +54,16 @@ def limpar_reservas_antigas():
             conn.close()
         except: pass
 
+def deletar_reserva_sql(reserva_id):
+    conn = get_db_connection()
+    if conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM reservas WHERE id = %s", (reserva_id,))
+        conn.commit()
+        conn.close()
+        st.rerun()
+
+# --- MODAL DETALHES ---
 @st.dialog("Detalhes do Equipamento", width="large")
 def modal_detalhes(item):
     st.write(f"### {item['nome']} (#{item['codigo']})")
@@ -38,62 +71,58 @@ def modal_detalhes(item):
     st.write(f"**Descrição:** {item['descricao']}")
     
     st.divider()
-    tab1, tab2, tab3 = st.tabs(["📅 Reservar", "📋 Ocupação", "⚙️ Gerenciar"])
+    # Membros só veem as duas primeiras abas. Admin vê a de Gerenciar.
+    tabs_labels = ["📅 Reservar", "📋 Ocupação"]
+    if st.session_state.auth_level == "admin":
+        tabs_labels.append("⚙️ Gerenciar")
     
-    with tab1:
-        quem = st.text_input("Nome do Responsável", key=f"user_input_{item['codigo']}")
-        
-        # Correção do erro de data: definimos valores padrão seguros
+    tabs = st.tabs(tabs_labels)
+    
+    with tabs[0]: # Reservar
+        quem = st.text_input("Responsável", key=f"user_input_{item['codigo']}")
         hoje = date.today()
-        d_ini = st.date_input("Data de Retirada", value=hoje, min_value=hoje, key=f"start_{item['codigo']}")
-        
-        # Se d_ini mudar, garantimos que d_fim não seja menor que d_ini
-        d_fim_default = d_ini
-        d_fim = st.date_input("Data de Devolução", value=d_fim_default, min_value=d_ini, key=f"end_{item['codigo']}")
+        d_ini = st.date_input("Retirada", value=hoje, min_value=hoje, key=f"start_{item['codigo']}")
+        d_fim = st.date_input("Devolução", value=d_ini, min_value=d_ini, key=f"end_{item['codigo']}")
         
         if st.button("Confirmar Reserva", use_container_width=True):
-            if not quem:
-                st.warning("Informe o responsável.")
-            else:
+            if quem:
                 conn = get_db_connection()
                 cur = conn.cursor()
-                cur.execute("""
-                    SELECT id FROM reservas 
-                    WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)
-                """, (item['codigo'], d_ini, d_fim))
-                
+                cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (item['codigo'], d_ini, d_fim))
                 if cur.fetchone():
                     st.error("⚠️ Já reservado neste período!")
                 else:
-                    cur.execute(
-                        "INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)",
-                        (item['codigo'], quem, d_ini, d_fim)
-                    )
+                    cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (item['codigo'], quem, d_ini, d_fim))
                     conn.commit()
                     st.success("✅ Reserva realizada!")
                     st.rerun()
                 conn.close()
 
-    with tab2:
+    with tabs[1]: # Ocupação
         conn = get_db_connection()
-        df_res = pd.read_sql("SELECT usuario, data_inicio, data_fim FROM reservas WHERE item_codigo = %s ORDER BY data_inicio ASC", conn, params=(item['codigo'],))
+        df_res = pd.read_sql("SELECT id, usuario, data_inicio, data_fim FROM reservas WHERE item_codigo = %s ORDER BY data_inicio ASC", conn, params=(item['codigo'],))
         conn.close()
         if not df_res.empty:
-            df_res.columns = ['Responsável', 'Início', 'Fim']
-            st.table(df_res)
+            for _, r in df_res.iterrows():
+                col_r1, col_r2 = st.columns([3, 1])
+                col_r1.write(f"**{r['usuario']}**: {r['data_inicio'].strftime('%d/%m')} - {r['data_fim'].strftime('%d/%m')}")
+                if st.session_state.auth_level == "admin":
+                    if col_r2.button("Remover", key=f"del_res_{r['id']}"):
+                        deletar_reserva_sql(r['id'])
         else:
             st.info("Item livre.")
 
-    with tab3:
-        if st.checkbox("Confirmar exclusão definitiva"):
-            if st.button("Remover agora", type="primary"):
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (item['codigo'],))
-                cur.execute("DELETE FROM itens WHERE codigo = %s", (item['codigo'],))
-                conn.commit()
-                conn.close()
-                st.rerun()
+    if st.session_state.auth_level == "admin":
+        with tabs[2]: # Gerenciar
+            if st.checkbox("Confirmar exclusão definitiva do ITEM"):
+                if st.button("REMOVER ITEM AGORA", type="primary"):
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (item['codigo'],))
+                    cur.execute("DELETE FROM itens WHERE codigo = %s", (item['codigo'],))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
 
 # --- PÁGINA: CATÁLOGO ---
 def exibir_catalogo():
@@ -122,27 +151,38 @@ def exibir_catalogo():
 
 # --- PÁGINA: AGENDA ---
 def exibir_agenda():
-    st.title("📅 Agenda de Reservas")
+    st.title("📅 Agenda Geral")
     limpar_reservas_antigas()
     conn = get_db_connection()
     if conn:
-        df = pd.read_sql("SELECT r.data_inicio, r.data_fim, r.usuario, i.nome, i.codigo FROM reservas r JOIN itens i ON r.item_codigo = i.codigo ORDER BY r.data_inicio ASC", conn)
+        df = pd.read_sql("SELECT r.id, r.data_inicio, r.data_fim, r.usuario, i.nome, i.codigo FROM reservas r JOIN itens i ON r.item_codigo = i.codigo ORDER BY r.data_inicio ASC", conn)
         conn.close()
         if not df.empty:
             hoje = date.today()
-            def destacar_hoje(row):
-                if row['data_inicio'] <= hoje <= row['data_fim']:
-                    return ['background-color: #d1e7dd; color: #0f5132; font-weight: bold'] * len(row)
-                return [''] * len(row)
+            st.write("Linhas em **verde** indicam equipamentos fora hoje.")
             
-            # Estilizamos e renomeamos de forma segura para exibição
-            df_view = df.rename(columns={'data_inicio': 'Início', 'data_fim': 'Fim', 'codigo': 'Cód', 'nome': 'Item', 'usuario': 'Responsável'})
-            st.dataframe(df.style.apply(destacar_hoje, axis=1), use_container_width=True, hide_index=True)
+            # Exibição linha a linha para permitir exclusão na agenda
+            for _, row in df.iterrows():
+                cor = "#d1e7dd" if row['data_inicio'] <= hoje <= row['data_fim'] else "transparent"
+                with st.container():
+                    c_ag1, c_ag2, c_ag3 = st.columns([3, 2, 1])
+                    with c_ag1:
+                        st.markdown(f"<div style='background-color:{cor}; padding:5px; border-radius:5px;'><b>{row['nome']}</b> (#{row['codigo']})<br>{row['usuario']}</div>", unsafe_allow_html=True)
+                    with c_ag2:
+                        st.write(f"{row['data_inicio'].strftime('%d/%m')} até {row['data_fim'].strftime('%d/%m')}")
+                    with c_ag3:
+                        if st.session_state.auth_level == "admin":
+                            if st.button("Baixa", key=f"ag_del_{row['id']}"):
+                                deletar_reserva_sql(row['id'])
+                st.divider()
         else:
             st.info("Nenhuma reserva ativa.")
 
 # --- PÁGINA: CADASTRO ---
 def exibir_cadastro():
+    if st.session_state.auth_level != "admin":
+        st.error("Apenas chefes administradores podem cadastrar novos itens.")
+        return
     st.title("➕ Cadastrar Item")
     with st.form("cad_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -150,9 +190,7 @@ def exibir_cadastro():
         nome = col1.text_input("Nome")
         ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
         desc = st.text_area("Descrição")
-        
-        # BOTÃO ÚNICO: O celular perguntará se quer Foto ou Galeria automaticamente
-        foto_upload = st.file_uploader("Foto (Câmera ou Galeria)", type=['jpg', 'jpeg', 'png'])
+        foto_upload = st.file_uploader("Foto", type=['jpg', 'jpeg', 'png'])
         
         if st.form_submit_button("Salvar"):
             if cod and nome and foto_upload:
@@ -167,11 +205,13 @@ def exibir_cadastro():
                 conn.commit()
                 conn.close()
                 st.success("Salvo!")
-            else:
-                st.warning("Preencha Código, Nome e Foto.")
 
 # --- NAVEGAÇÃO ---
-opcao = st.sidebar.radio("Navegação", ["📦 Catálogo", "📅 Agenda", "➕ Cadastrar"])
+menu_options = ["📦 Catálogo", "📅 Agenda"]
+if st.session_state.auth_level == "admin":
+    menu_options.append("➕ Cadastrar")
+
+opcao = st.sidebar.radio("Navegação", menu_options)
 if opcao == "📦 Catálogo": exibir_catalogo()
 elif opcao == "📅 Agenda": exibir_agenda()
 else: exibir_cadastro()
