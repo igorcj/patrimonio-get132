@@ -129,7 +129,7 @@ def exibir_catalogo():
     st.title("📦 Catálogo GET 132")
     c1, c2 = st.columns([1, 2])
     busca = c1.text_input("🔍 Buscar...")
-    ramos = c2.multiselect("⚜️ Ramos", ["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"], default=[])
+    ramos = c2.multiselect("⚜️ Ramos", ["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"], default=["Grupo", "Alcatéia", "Escoteiro", "Sênior", "Pioneiro"])
 
     conn = get_db_connection()
     if conn:
