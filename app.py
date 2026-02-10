@@ -61,24 +61,33 @@ def exibir_catalogo():
 # --- ABA: CADASTRO ---
 def exibir_cadastro():
     st.title("➕ Cadastrar Novo Item")
+    
     with st.form("cad_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         cod = col1.text_input("Código (Ex: 001)")
         nome = col1.text_input("Nome do Item")
         ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
         desc = st.text_area("Descrição")
-        foto = st.file_uploader("Capturar ou subir Foto", type=['jpg', 'jpeg', 'png'])
+        
+        st.write("---")
+        st.write("📸 **Foto do Equipamento**")
+        # Opção de tirar foto na hora ou subir arquivo
+        foto_camera = st.camera_input("Tirar foto agora")
+        foto_upload = st.file_uploader("Ou selecionar arquivo", type=['jpg', 'jpeg', 'png'])
+        
+        # Prioriza a foto da câmera se ambas existirem
+        foto_final = foto_camera if foto_camera else foto_upload
         
         if st.form_submit_button("Salvar no Sistema"):
-            if cod and nome and foto:
-                # Processamento da Imagem: Quadrada e Leve
-                img = Image.open(foto)
+            if cod and nome and foto_final:
+                # Processamento: Reduzi para 300x300 e 50% de qualidade para máxima economia
+                img = Image.open(foto_final)
                 w, h = img.size
                 d = min(w, h)
-                img = img.crop(((w-d)//2, (h-d)//2, (w+d)//2, (h+d)//2)).resize((400,400))
+                img = img.crop(((w-d)//2, (h-d)//2, (w+d)//2, (h+d)//2)).resize((300,300))
                 
                 buf = io.BytesIO()
-                img.convert("RGB").save(buf, format="JPEG", quality=60)
+                img.convert("RGB").save(buf, format="JPEG", quality=50) # Qualidade 50%
                 foto_bytes = buf.getvalue()
                 
                 conn = get_db_connection()
@@ -92,11 +101,12 @@ def exibir_cadastro():
                         conn.commit()
                         cur.close()
                         conn.close()
-                        st.success(f"Item {nome} cadastrado!")
+                        st.success(f"Item {nome} cadastrado com sucesso!")
+                        st.balloons() # Celebração escoteira digital
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
             else:
-                st.warning("Preencha Código, Nome e Foto.")
+                st.warning("Preencha Código, Nome e tire uma Foto.")
 
 # --- NAVEGAÇÃO ---
 st.sidebar.title("GET 132")
