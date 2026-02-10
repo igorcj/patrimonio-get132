@@ -19,7 +19,7 @@ def get_db_connection():
         st.error(f"Erro de Conexão: {e}")
         return None
 
-# --- FUNÇÃO: LIMPEZA AUTOMÁTICA ---
+# --- FUNÇÕES SQL ---
 def limpar_reservas_antigas():
     conn = get_db_connection()
     if conn:
@@ -29,125 +29,115 @@ def limpar_reservas_antigas():
             conn.commit()
             cur.close()
             conn.close()
-        except:
-            pass
+        except: pass
+
+@st.dialog("Detalhes do Equipamento", width="large")
+def modal_detalhes(item):
+    st.write(f"### {item['nome']} (#{item['codigo']})")
+    st.image(bytes(item['foto_blob']) if item['foto_blob'] else "https://via.placeholder.com/300")
+    st.write(f"**Ramo:** {item['ramo']}")
+    st.write(f"**Descrição:** {item['descricao']}")
+    
+    st.divider()
+    tab1, tab2 = st.tabs(["📅 Reservar", "⚙️ Gerenciar"])
+    
+    with tab1:
+        with st.form(f"res_{item['codigo']}", clear_on_submit=True):
+            quem = st.text_input("Responsável")
+            d_ini = st.date_input("Início", min_value=datetime.now())
+            d_fim = st.date_input("Fim", min_value=d_ini)
+            if st.form_submit_button("Confirmar Reserva"):
+                if quem:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (item['codigo'], d_ini, d_fim))
+                    if cur.fetchone():
+                        st.error("Item ocupado nestas datas!")
+                    else:
+                        cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (item['codigo'], quem, d_ini, d_fim))
+                        conn.commit()
+                        st.success("Reserva realizada!")
+                    conn.close()
+
+    with tab2:
+        st.warning("Atenção: Esta ação é irreversível.")
+        if st.checkbox(f"Confirmar que deseja deletar #{item['codigo']}"):
+            if st.button("DELETAR PERMANENTEMENTE"):
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (item['codigo'],))
+                cur.execute("DELETE FROM itens WHERE codigo = %s", (item['codigo'],))
+                conn.commit()
+                conn.close()
+                st.rerun()
 
 # --- PÁGINA: CATÁLOGO ---
 def exibir_catalogo():
-    st.title("📦 Catálogo de Equipamentos")
+    st.title("📦 Catálogo GET 132")
     
-    # Filtros na Barra Lateral para o Catálogo
-    st.sidebar.divider()
-    st.sidebar.write("### Filtros")
-    busca = st.sidebar.text_input("🔍 Busca rápida", placeholder="Nome ou código...")
-    ramos_selecionados = st.sidebar.multiselect(
-        "Filtrar por Ramo:", 
-        ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"],
-        default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"]
-    )
-    
+    # Filtros no topo (Melhor para mobile)
+    with st.expander("🔍 Filtros e Busca", expanded=False):
+        busca = st.text_input("Buscar por nome ou código")
+        ramos = st.multiselect("Ramos", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"], default=["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+
     conn = get_db_connection()
     if conn:
         df = pd.read_sql("SELECT * FROM itens ORDER BY codigo ASC", conn)
         conn.close()
 
         if not df.empty:
-            # Aplicação dos Filtros
-            if ramos_selecionados:
-                df = df[df['ramo'].isin(ramos_selecionados)]
+            df = df[df['ramo'].isin(ramos)]
             if busca:
                 df = df[df.apply(lambda r: busca.lower() in str(r.values).lower(), axis=1)]
 
-            cols = st.columns(4)
+            # Grid Mobile: 2 colunas no celular, 4 no PC
+            cols = st.columns(2 if st.session_state.get('is_mobile', True) else 4)
             for i, row in df.reset_index(drop=True).iterrows():
-                with cols[i % 4]:
-                    # Imagem e Infos Básicas
+                with cols[i % len(cols)]:
                     st.image(bytes(row['foto_blob']) if row['foto_blob'] else "https://via.placeholder.com/300", use_container_width=True)
-                    st.subheader(f"#{row['codigo']} {row['nome']}")
-                    st.markdown(f"**Ramo:** {row['ramo']}")
-                    st.caption(row['descricao'])
-                    
-                    # Seção de Detalhes e Ações
-                    with st.expander("📅 Reservar / ⚙️ Gerenciar"):
-                        # Aba de Reserva
-                        st.write("**Nova Reserva:**")
-                        with st.form(f"f_res_{row['codigo']}", clear_on_submit=True):
-                            quem = st.text_input("Responsável")
-                            d_ini = st.date_input("Início", min_value=datetime.now())
-                            d_fim = st.date_input("Fim", min_value=d_ini)
-                            if st.form_submit_button("Confirmar Reserva"):
-                                if quem:
-                                    reserva_sucesso = realizar_reserva_sql(row['codigo'], quem, d_ini, d_fim)
-                                    if reserva_sucesso: st.success("Reserva feita!")
-                        
-                        st.divider()
-                        # Aba de Exclusão (Com confirmação dupla)
-                        st.write("⚠️ **Zona de Perigo**")
-                        if st.checkbox(f"Desejo remover o item #{row['codigo']}", key=f"del_chk_{row['codigo']}"):
-                            if st.button(f"CONFIRMAR EXCLUSÃO DEFINITIVA", key=f"del_btn_{row['codigo']}"):
-                                remover_item_sql(row['codigo'])
-                                st.rerun()
-
-# --- FUNÇÕES SQL AUXILIARES ---
-def realizar_reserva_sql(codigo, usuario, d_ini, d_fim):
-    conn = get_db_connection()
-    if conn:
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM reservas WHERE item_codigo = %s AND NOT (data_fim < %s OR data_inicio > %s)", (codigo, d_ini, d_fim))
-        if cur.fetchone():
-            st.error("Item ocupado nesta data!")
-            return False
-        cur.execute("INSERT INTO reservas (item_codigo, usuario, data_inicio, data_fim) VALUES (%s, %s, %s, %s)", (codigo, usuario, d_ini, d_fim))
-        conn.commit()
-        conn.close()
-        return True
-
-def remover_item_sql(codigo):
-    conn = get_db_connection()
-    if conn:
-        cur = conn.cursor()
-        # Primeiro remove as reservas do item para não dar erro de chave estrangeira
-        cur.execute("DELETE FROM reservas WHERE item_codigo = %s", (codigo,))
-        cur.execute("DELETE FROM itens WHERE codigo = %s", (codigo,))
-        conn.commit()
-        conn.close()
-        st.toast(f"Item {codigo} removido!")
+                    st.write(f"**#{row['codigo']} {row['nome']}**")
+                    st.caption(f"⚜️ {row['ramo']}")
+                    if st.button("Ver / Reservar", key=f"btn_{row['codigo']}", use_container_width=True):
+                        modal_detalhes(row)
 
 # --- PÁGINA: AGENDA ---
 def exibir_agenda():
-    st.title("📅 Agenda de Ocupação")
-    limpar_reservas_antigas() # Autolimpeza ao abrir
+    st.title("📅 Agenda de Reservas")
+    limpar_reservas_antigas()
     
     conn = get_db_connection()
     if conn:
-        query = """
+        df = pd.read_sql("""
             SELECT r.data_inicio, r.data_fim, r.usuario, i.nome, i.codigo 
-            FROM reservas r 
-            JOIN itens i ON r.item_codigo = i.codigo
+            FROM reservas r JOIN itens i ON r.item_codigo = i.codigo
             ORDER BY r.data_inicio ASC
-        """
-        df_res = pd.read_sql(query, conn)
+        """, conn)
         conn.close()
 
-        if not df_res.empty:
-            df_res['Período'] = df_res.apply(lambda x: f"{x['data_inicio'].strftime('%d/%m')} até {x['data_fim'].strftime('%d/%m')}", axis=1)
-            st.table(df_res[['Período', 'codigo', 'nome', 'usuario']].rename(columns={'codigo': 'Cód.', 'nome': 'Item', 'usuario': 'Responsável'}))
+        if not df.empty:
+            hoje = datetime.now().date()
+            
+            def destacar_hoje(row):
+                if row.data_inicio <= hoje <= row.data_fim:
+                    return ['background-color: #d4edda; font-weight: bold'] * len(row)
+                return [''] * len(row)
+
+            st.write("Linhas em **verde** indicam itens em uso hoje.")
+            # Estilização do DataFrame
+            df_view = df.rename(columns={'data_inicio': 'Início', 'data_fim': 'Fim', 'codigo': 'Cód', 'nome': 'Item', 'usuario': 'Responsável'})
+            st.dataframe(df_view.style.apply(destacar_hoje, axis=1), use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhuma reserva ativa.")
+            st.info("Nenhuma reserva futura.")
 
 # --- PÁGINA: CADASTRO ---
 def exibir_cadastro():
     st.title("➕ Cadastrar Item")
     with st.form("cad_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        cod = col1.text_input("Código")
-        nome = col1.text_input("Nome")
-        ramo = col2.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
+        cod = st.text_input("Código")
+        nome = st.text_input("Nome")
+        ramo = st.selectbox("Ramo", ["Alcatéia", "Escoteiro", "Sênior", "Pioneiro", "Grupo"])
         desc = st.text_area("Descrição")
-        f_cam = st.camera_input("Tirar foto")
-        f_up = st.file_uploader("Ou subir arquivo", type=['jpg', 'jpeg', 'png'])
-        foto = f_cam if f_cam else f_up
-        
+        foto = st.camera_input("Foto")
         if st.form_submit_button("Salvar"):
             if cod and nome and foto:
                 img = Image.open(foto)
@@ -156,20 +146,15 @@ def exibir_cadastro():
                 img = img.crop(((w-d)//2, (h-d)//2, (w+d)//2, (h+d)//2)).resize((300,300))
                 buf = io.BytesIO()
                 img.convert("RGB").save(buf, format="JPEG", quality=50)
-                
                 conn = get_db_connection()
-                if conn:
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO itens (codigo, nome, descricao, ramo, foto_blob) VALUES (%s, %s, %s, %s, %s)",
-                                (cod, nome, desc, ramo, psycopg2.Binary(buf.getvalue())))
-                    conn.commit()
-                    conn.close()
-                    st.success("Item salvo!")
+                cur = conn.cursor()
+                cur.execute("INSERT INTO itens (codigo, nome, descricao, ramo, foto_blob) VALUES (%s, %s, %s, %s, %s)", (cod, nome, desc, ramo, psycopg2.Binary(buf.getvalue())))
+                conn.commit()
+                conn.close()
+                st.success("Salvo!")
 
-# --- MENU LATERAL ---
-st.sidebar.title("⚜️ GET 132")
-opcao = st.sidebar.radio("Ir para:", ["📦 Catálogo", "📅 Agenda", "➕ Cadastrar"])
-
+# --- NAVEGAÇÃO ---
+opcao = st.sidebar.radio("Navegação", ["📦 Catálogo", "📅 Agenda", "➕ Cadastrar"])
 if opcao == "📦 Catálogo": exibir_catalogo()
 elif opcao == "📅 Agenda": exibir_agenda()
 else: exibir_cadastro()
